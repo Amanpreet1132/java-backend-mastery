@@ -79,7 +79,12 @@ public class MultiThreadedEchoServer {
                 // 4. Route based on method + path
                 if ("GET".equals(method) && "/expenses".equals(path)) {
                     handleGetExpenses(out);
-                } else if ("POST".equals(method) && "/expenses".equals(path)) {
+                } else if ("GET".equals(method) && path.startsWith("/expenses/")) {
+                    handleGetExpenseById(out,path);
+                } else if ("DELETE".equals(method) && path.startsWith("/expenses/")) {
+                    handleDeleteExpenseById(out,path);
+                }
+                if ("POST".equals(method) && "/expenses".equals(path)) {
                     handlePostExpenses(in, out, contentLength);
                 } else {
                     sendErrorResponse(out, 404, "Not Found");
@@ -174,6 +179,94 @@ public class MultiThreadedEchoServer {
                 if (end == -1) end = json.indexOf('}', start);
                 return json.substring(start, end).trim();
             }
+        }
+
+
+        private void handleGetExpenseById(PrintWriter out, String path) {
+            String[] pathParts = path.split("/");
+            if (pathParts.length < 3) {
+                sendErrorResponse(out, 400, "Bad Request: Invalid path");
+                return;
+            }
+            String idStr = pathParts[2];
+            int id;
+            try {
+                id = Integer.parseInt(idStr);
+            } catch (NumberFormatException e) {
+                sendErrorResponse(out, 400, "Bad Request: ID must be a number");
+                return;
+            }
+
+            Expense found = null;
+            synchronized (MultiThreadedEchoServer.class) {
+                for (Expense e : expenses) {
+                    if (e.getId() == id) {
+                        found = e;
+                        break;
+                    }
+                }
+            }
+
+            if (found == null) {
+                sendErrorResponse(out, 404, "Expense not found");
+                return;
+            }
+
+            String responseBody = String.format(
+                    "{\"id\":%d,\"name\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
+                    found.getId(), found.getName(), found.getAmount(), found.getCategory()
+            );
+
+            out.println("HTTP/1.1 200 OK");
+            out.println("Content-Type: application/json");
+            out.println("Content-Length: " + responseBody.length());
+            out.println();
+            out.println(responseBody);
+        }
+
+
+        private void handleDeleteExpenseById(PrintWriter out, String path) {
+            String[] pathParts = path.split("/");
+            if (pathParts.length < 3) {
+                sendErrorResponse(out, 400, "Bad Request: Invalid path");
+                return;
+            }
+            int id;
+            try {
+                id = Integer.parseInt(pathParts[2]);
+            } catch (NumberFormatException e) {
+                sendErrorResponse(out, 400, "Bad Request: ID must be a number");
+                return;
+            }
+
+            // Find and remove expense (thread‑safe)
+            boolean removed;
+            synchronized (MultiThreadedEchoServer.class) {
+                // We need to find the index to remove by id
+                int indexToRemove = -1;
+                for (int i = 0; i < expenses.size(); i++) {
+                    if (expenses.get(i).getId() == id) {
+                        indexToRemove = i;
+                        break;
+                    }
+                }
+                if (indexToRemove != -1) {
+                    expenses.remove(indexToRemove);
+                    removed = true;
+                } else {
+                    removed = false;
+                }
+            }
+
+            if (!removed) {
+                sendErrorResponse(out, 404, "Expense not found");
+                return;
+            }
+
+            // 204 No Content – no response body
+            out.println("HTTP/1.1 204 No Content");
+            out.println("Content-Length: 0");
+            out.println(); // blank line ends headers
         }
 
         private void sendErrorResponse(PrintWriter out, int statusCode, String message) {
