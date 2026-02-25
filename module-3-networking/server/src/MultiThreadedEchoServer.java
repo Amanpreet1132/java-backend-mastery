@@ -83,8 +83,9 @@ public class MultiThreadedEchoServer {
                     handleGetExpenseById(out,path);
                 } else if ("DELETE".equals(method) && path.startsWith("/expenses/")) {
                     handleDeleteExpenseById(out,path);
-                }
-                if ("POST".equals(method) && "/expenses".equals(path)) {
+                } else if ("PUT".equals(method) && path.startsWith("/expenses/")) {
+                    handlePutExpenseById(in,out,path,contentLength);
+                } else if ("POST".equals(method) && "/expenses".equals(path)) {
                     handlePostExpenses(in, out, contentLength);
                 } else {
                     sendErrorResponse(out, 404, "Not Found");
@@ -267,6 +268,73 @@ public class MultiThreadedEchoServer {
             out.println("HTTP/1.1 204 No Content");
             out.println("Content-Length: 0");
             out.println(); // blank line ends headers
+        }
+
+        private void handlePutExpenseById(BufferedReader in, PrintWriter out, String path, int contentLength) throws IOException {
+            // 1. Extract ID from path (e.g., "/expenses/2" -> "2")
+            String[] pathParts = path.split("/");
+            if (pathParts.length < 3) {
+                sendErrorResponse(out, 400, "Bad Request: Invalid path");
+                return;
+            }
+            int id;
+            try {
+                id = Integer.parseInt(pathParts[2]);
+            } catch (NumberFormatException e) {
+                sendErrorResponse(out, 400, "Bad Request: ID must be a number");
+                return;
+            }
+
+            // 2. Read the request body (must be present)
+            if (contentLength <= 0) {
+                sendErrorResponse(out, 400, "Bad Request: Missing body");
+                return;
+            }
+            char[] bodyChars = new char[contentLength];
+            int bytesRead = in.read(bodyChars, 0, contentLength);
+            String body = new String(bodyChars, 0, bytesRead);
+            System.out.println("PUT body: " + body);
+
+            // 3. Parse the JSON to get updated fields
+            String name = extractJsonValue(body, "name");
+            String category = extractJsonValue(body, "category");
+            double amount;
+            try {
+                amount = Double.parseDouble(extractJsonValue(body, "amount"));
+            } catch (NumberFormatException e) {
+                sendErrorResponse(out, 400, "Bad Request: Invalid amount");
+                return;
+            }
+
+            // 4. Thread‑safe update: find and replace the expense
+            boolean updated = false;
+            synchronized (MultiThreadedEchoServer.class) {
+                for (int i = 0; i < expenses.size(); i++) {
+                    Expense e = expenses.get(i);
+                    if (e.getId() == id) {
+                        // Create a new Expense object with the same ID but updated fields
+                        Expense updatedExpense = new Expense(id, name, amount, category);
+                        expenses.set(i, updatedExpense);
+                        updated = true;
+
+                        // Build the response JSON (the updated expense)
+                        String responseBody = String.format(
+                                "{\"id\":%d,\"name\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
+                                id, name, amount, category);
+
+                        out.println("HTTP/1.1 200 OK");
+                        out.println("Content-Type: application/json");
+                        out.println("Content-Length: " + responseBody.length());
+                        out.println();
+                        out.println(responseBody);
+                        break;
+                    }
+                }
+            }
+
+            if (!updated) {
+                sendErrorResponse(out, 404, "Expense not found");
+            }
         }
 
         private void sendErrorResponse(PrintWriter out, int statusCode, String message) {
