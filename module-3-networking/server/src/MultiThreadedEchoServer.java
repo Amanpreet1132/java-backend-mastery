@@ -6,12 +6,97 @@ public class MultiThreadedEchoServer {
     // In‑memory "database"
     private static List<Expense> expenses = new ArrayList<>();
     private static int nextId = 1;
+    private static final String DATA_FILE = "expenses.jsonl";
 
     // Static initializer – runs once when class is loaded
     static {
-        expenses.add(new Expense(nextId++, "Coffee", 5.50, "Food"));
-        expenses.add(new Expense(nextId++, "Movie", 12.00, "Entertainment"));
-        expenses.add(new Expense(nextId++, "Uber", 24.50, "Transport"));
+        loadFromFile();
+    }
+
+    private static void saveToFile() {
+        synchronized (MultiThreadedEchoServer.class) {
+            try (PrintWriter fileOut = new PrintWriter(new FileWriter(DATA_FILE))) {
+                for (Expense e : expenses) {
+                    String line = String.format(
+                            "{\"id\":%d,\"name\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
+                            e.getId(), e.getName(), e.getAmount(), e.getCategory()
+                    );
+                    fileOut.println(line);
+                }
+            } catch (IOException e) {
+                System.out.println("Error saving to file: " + e.getMessage());
+            }
+        }
+    }
+
+    private static String parseJsonValue(String json, String key) {
+        String search = "\"" + key + "\":";
+        int start = json.indexOf(search);
+        if (start == -1) return "";
+        start += search.length();
+        while (start < json.length() && json.charAt(start) <= ' ') start++;
+        if (json.charAt(start) == '"') {
+            int end = json.indexOf('"', start + 1);
+            return json.substring(start + 1, end);
+        } else {
+            int end = json.indexOf(',', start);
+            if (end == -1) end = json.indexOf('}', start);
+            return json.substring(start, end).trim();
+        }
+    }
+
+    private static void loadFromFile() {
+        File file = new File(DATA_FILE);
+        if (!file.exists()) {
+            // No saved data – create sample data
+            expenses = new ArrayList<>();
+            nextId = 1;
+            expenses.add(new Expense(nextId++, "Coffee", 5.50, "Food"));
+            expenses.add(new Expense(nextId++, "Movie", 12.00, "Entertainment"));
+            expenses.add(new Expense(nextId++, "Uber", 24.50, "Transport"));
+            saveToFile(); // save sample data so next start loads them
+            return;
+        }
+
+        List<Expense> loaded = new ArrayList<>();
+        int maxId = 0;
+
+        try (BufferedReader fileReader = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = fileReader.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+
+                String idStr = parseJsonValue(line, "id");
+                String name = parseJsonValue(line, "name");
+                String amountStr = parseJsonValue(line, "amount");
+                String category = parseJsonValue(line, "category");
+
+                if (idStr.isEmpty() || name.isEmpty() || amountStr.isEmpty() || category.isEmpty()) {
+                    System.out.println("Skipping malformed line: " + line);
+                    continue;
+                }
+
+                int id = Integer.parseInt(idStr);
+                double amount = Double.parseDouble(amountStr);
+
+                loaded.add(new Expense(id, name, amount, category));
+                if (id > maxId) maxId = id;
+            }
+        } catch (IOException e) {
+            System.out.println("Error loading from file: " + e.getMessage());
+            // Fall back to sample data on error
+            loaded.clear();
+            loaded.add(new Expense(1, "Coffee", 5.50, "Food"));
+            loaded.add(new Expense(2, "Movie", 12.00, "Entertainment"));
+            loaded.add(new Expense(3, "Uber", 24.50, "Transport"));
+            maxId = 3;
+        }
+
+        // Replace the static list with the loaded data
+        synchronized (MultiThreadedEchoServer.class) {
+            expenses = loaded;
+            nextId = maxId + 1;
+        }
     }
 
     public static void main(String[] args) throws IOException {
@@ -150,6 +235,7 @@ public class MultiThreadedEchoServer {
                 newId = nextId++;
                 Expense newExpense = new Expense(newId, name, amount, category);
                 expenses.add(newExpense);
+                saveToFile();
             }
 
             // Build response JSON
@@ -254,6 +340,7 @@ public class MultiThreadedEchoServer {
                 if (indexToRemove != -1) {
                     expenses.remove(indexToRemove);
                     removed = true;
+                    saveToFile();
                 } else {
                     removed = false;
                 }
@@ -315,7 +402,9 @@ public class MultiThreadedEchoServer {
                         // Create a new Expense object with the same ID but updated fields
                         Expense updatedExpense = new Expense(id, name, amount, category);
                         expenses.set(i, updatedExpense);
+                        saveToFile();
                         updated = true;
+
 
                         // Build the response JSON (the updated expense)
                         String responseBody = String.format(
