@@ -159,17 +159,27 @@ public class MultiThreadedEchoServer {
                     return;
                 }
                 String method = parts[0];
-                String path = parts[1];
+                String fullPath = parts[1];  // may contain ? and query
+
+                // Separate path and query string
+                String path = fullPath;
+                String queryString = "";
+                int queryIndex = fullPath.indexOf('?');
+                if (queryIndex != -1) {
+                    path = fullPath.substring(0, queryIndex);
+                    queryString = fullPath.substring(queryIndex + 1);
+                }
 
                 // 4. Route based on method + path
                 if ("GET".equals(method) && "/expenses".equals(path)) {
-                    handleGetExpenses(out);
+                    Map<String, String> queryParams = parseQueryString(queryString);
+                    handleGetExpenses(out, queryParams);
                 } else if ("GET".equals(method) && path.startsWith("/expenses/")) {
-                    handleGetExpenseById(out,path);
+                    handleGetExpenseById(out, path);
                 } else if ("DELETE".equals(method) && path.startsWith("/expenses/")) {
-                    handleDeleteExpenseById(out,path);
+                    handleDeleteExpenseById(out, path);
                 } else if ("PUT".equals(method) && path.startsWith("/expenses/")) {
-                    handlePutExpenseById(in,out,path,contentLength);
+                    handlePutExpenseById(in, out, path, contentLength);
                 } else if ("POST".equals(method) && "/expenses".equals(path)) {
                     handlePostExpenses(in, out, contentLength);
                 } else {
@@ -183,19 +193,37 @@ public class MultiThreadedEchoServer {
             }
         }
 
-        private void handleGetExpenses(PrintWriter out) {
-            // Build JSON array manually
+        private void handleGetExpenses(PrintWriter out, Map<String, String> queryParams) {
+            // Determine which expenses to include
+            List<Expense> result = new ArrayList<>();
+            String categoryFilter = queryParams.get("category");
+
+            synchronized (MultiThreadedEchoServer.class) {
+                if (categoryFilter != null && !categoryFilter.isEmpty()) {
+                    // Filter by category (case‑sensitive)
+                    for (Expense e : expenses) {
+                        if (categoryFilter.equals(e.getCategory())) {
+                            result.add(e);
+                        }
+                    }
+                } else {
+                    // No filter – return all
+                    result.addAll(expenses);
+                }
+            }
+
+            // Build JSON array using the result list
             StringBuilder json = new StringBuilder();
             json.append("[\n");
-            for (int i = 0; i < expenses.size(); i++) {
-                Expense e = expenses.get(i);
+            for (int i = 0; i < result.size(); i++) {
+                Expense e = result.get(i);
                 json.append("  {")
                         .append("\"id\":").append(e.getId()).append(",")
                         .append("\"name\":\"").append(e.getName()).append("\",")
                         .append("\"amount\":").append(e.getAmount()).append(",")
                         .append("\"category\":\"").append(e.getCategory()).append("\"")
                         .append("}");
-                if (i < expenses.size() - 1) {
+                if (i < result.size() - 1) {
                     json.append(",");
                 }
                 json.append("\n");
@@ -204,11 +232,10 @@ public class MultiThreadedEchoServer {
 
             String responseBody = json.toString();
 
-            // Send HTTP response
             out.println("HTTP/1.1 200 OK");
             out.println("Content-Type: application/json");
             out.println("Content-Length: " + responseBody.length());
-            out.println(); // blank line
+            out.println();
             out.println(responseBody);
         }
 
@@ -266,6 +293,24 @@ public class MultiThreadedEchoServer {
                 if (end == -1) end = json.indexOf('}', start);
                 return json.substring(start, end).trim();
             }
+        }
+
+        private Map<String, String> parseQueryString(String queryString) {
+            Map<String, String> queryParams = new HashMap<>();
+            if (queryString == null || queryString.isEmpty()) {
+                return queryParams;
+            }
+            String[] pairs = queryString.split("&");
+            for (String pair : pairs) {
+                String[] keyValue = pair.split("=");
+                if (keyValue.length == 2) {
+                    queryParams.put(keyValue[0], keyValue[1]);
+                } else if (keyValue.length == 1) {
+                    // key with no value (e.g., "?category") – treat as empty string
+                    queryParams.put(keyValue[0], "");
+                }
+            }
+            return queryParams;
         }
 
 
