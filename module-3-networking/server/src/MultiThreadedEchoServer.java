@@ -254,7 +254,20 @@ public class MultiThreadedEchoServer {
             // Very primitive JSON parsing (for learning only)
             String name = extractJsonValue(body, "name");
             String category = extractJsonValue(body, "category");
-            double amount = Double.parseDouble(extractJsonValue(body, "amount"));
+            double amount;
+            try {
+                amount = Double.parseDouble(extractJsonValue(body, "amount"));
+            } catch (NumberFormatException e) {
+                sendErrorResponse(out, 400, "Bad Request: Invalid amount");
+                return;
+            }
+
+            // Validate the data
+            String validationError = validateExpenseData(name, category, amount);
+            if (validationError != null) {
+                sendErrorResponse(out, 400, "Bad Request: " + validationError);
+                return;
+            }
 
             // Thread‑safe addition
             int newId;
@@ -435,6 +448,12 @@ public class MultiThreadedEchoServer {
                 amount = Double.parseDouble(extractJsonValue(body, "amount"));
             } catch (NumberFormatException e) {
                 sendErrorResponse(out, 400, "Bad Request: Invalid amount");
+                return;
+            }
+
+            String validationError = validateExpenseData(name, category, amount);
+            if (validationError != null) {
+                sendErrorResponse(out, 400, "Bad Request: " + validationError);
                 return;
             }
 
