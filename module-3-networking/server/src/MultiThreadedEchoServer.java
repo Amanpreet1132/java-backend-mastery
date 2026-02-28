@@ -1,6 +1,9 @@
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.json.JSONException;
 
 public class MultiThreadedEchoServer {
     // In‑memory "database"
@@ -15,87 +18,68 @@ public class MultiThreadedEchoServer {
 
     private static void saveToFile() {
         synchronized (MultiThreadedEchoServer.class) {
+            JSONArray jsonArray = new JSONArray();
+            for (Expense e : expenses) {
+                JSONObject obj = new JSONObject();
+                obj.put("id", e.getId());
+                obj.put("name", e.getName());
+                obj.put("amount", e.getAmount());
+                obj.put("category", e.getCategory());
+                jsonArray.put(obj);
+            }
             try (PrintWriter fileOut = new PrintWriter(new FileWriter(DATA_FILE))) {
-                for (Expense e : expenses) {
-                    String line = String.format(
-                            "{\"id\":%d,\"name\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
-                            e.getId(), e.getName(), e.getAmount(), e.getCategory()
-                    );
-                    fileOut.println(line);
-                }
+                // toString(2) adds indentation for readability
+                fileOut.print(jsonArray.toString(2));
             } catch (IOException e) {
                 System.out.println("Error saving to file: " + e.getMessage());
             }
         }
     }
 
-    private static String parseJsonValue(String json, String key) {
-        String search = "\"" + key + "\":";
-        int start = json.indexOf(search);
-        if (start == -1) return "";
-        start += search.length();
-        while (start < json.length() && json.charAt(start) <= ' ') start++;
-        if (json.charAt(start) == '"') {
-            int end = json.indexOf('"', start + 1);
-            return json.substring(start + 1, end);
-        } else {
-            int end = json.indexOf(',', start);
-            if (end == -1) end = json.indexOf('}', start);
-            return json.substring(start, end).trim();
-        }
-    }
+
 
     private static void loadFromFile() {
         File file = new File(DATA_FILE);
         if (!file.exists()) {
-            // No saved data – create sample data
-            expenses = new ArrayList<>();
-            nextId = 1;
+            // No saved data – use sample data
             expenses.add(new Expense(nextId++, "Coffee", 5.50, "Food"));
             expenses.add(new Expense(nextId++, "Movie", 12.00, "Entertainment"));
             expenses.add(new Expense(nextId++, "Uber", 24.50, "Transport"));
-            saveToFile(); // save sample data so next start loads them
+            saveToFile();
             return;
         }
 
-        List<Expense> loaded = new ArrayList<>();
-        int maxId = 0;
-
         try (BufferedReader fileReader = new BufferedReader(new FileReader(file))) {
+            StringBuilder content = new StringBuilder();
             String line;
             while ((line = fileReader.readLine()) != null) {
-                if (line.trim().isEmpty()) continue;
+                content.append(line);
+            }
+            JSONArray jsonArray = new JSONArray(content.toString());
 
-                String idStr = parseJsonValue(line, "id");
-                String name = parseJsonValue(line, "name");
-                String amountStr = parseJsonValue(line, "amount");
-                String category = parseJsonValue(line, "category");
-
-                if (idStr.isEmpty() || name.isEmpty() || amountStr.isEmpty() || category.isEmpty()) {
-                    System.out.println("Skipping malformed line: " + line);
-                    continue;
-                }
-
-                int id = Integer.parseInt(idStr);
-                double amount = Double.parseDouble(amountStr);
-
+            List<Expense> loaded = new ArrayList<>();
+            int maxId = 0;
+            for (int i = 0; i < jsonArray.length(); i++) {
+                JSONObject obj = jsonArray.getJSONObject(i);
+                int id = obj.getInt("id");
+                String name = obj.getString("name");
+                double amount = obj.getDouble("amount");
+                String category = obj.getString("category");
                 loaded.add(new Expense(id, name, amount, category));
                 if (id > maxId) maxId = id;
             }
-        } catch (IOException e) {
-            System.out.println("Error loading from file: " + e.getMessage());
-            // Fall back to sample data on error
-            loaded.clear();
-            loaded.add(new Expense(1, "Coffee", 5.50, "Food"));
-            loaded.add(new Expense(2, "Movie", 12.00, "Entertainment"));
-            loaded.add(new Expense(3, "Uber", 24.50, "Transport"));
-            maxId = 3;
-        }
 
-        // Replace the static list with the loaded data
-        synchronized (MultiThreadedEchoServer.class) {
-            expenses = loaded;
-            nextId = maxId + 1;
+            synchronized (MultiThreadedEchoServer.class) {
+                expenses.clear();
+                expenses.addAll(loaded);
+                nextId = maxId + 1;
+            }
+        } catch (IOException | JSONException e) {
+            System.out.println("Error loading from file: " + e.getMessage());
+            // Fall back to sample data
+            expenses.add(new Expense(nextId++, "Coffee", 5.50, "Food"));
+            expenses.add(new Expense(nextId++, "Movie", 12.00, "Entertainment"));
+            expenses.add(new Expense(nextId++, "Uber", 24.50, "Transport"));
         }
     }
 
@@ -194,43 +178,31 @@ public class MultiThreadedEchoServer {
         }
 
         private void handleGetExpenses(PrintWriter out, Map<String, String> queryParams) {
-            // Determine which expenses to include
             List<Expense> result = new ArrayList<>();
             String categoryFilter = queryParams.get("category");
 
             synchronized (MultiThreadedEchoServer.class) {
                 if (categoryFilter != null && !categoryFilter.isEmpty()) {
-                    // Filter by category (case‑sensitive)
                     for (Expense e : expenses) {
                         if (categoryFilter.equals(e.getCategory())) {
                             result.add(e);
                         }
                     }
                 } else {
-                    // No filter – return all
                     result.addAll(expenses);
                 }
             }
 
-            // Build JSON array using the result list
-            StringBuilder json = new StringBuilder();
-            json.append("[\n");
-            for (int i = 0; i < result.size(); i++) {
-                Expense e = result.get(i);
-                json.append("  {")
-                        .append("\"id\":").append(e.getId()).append(",")
-                        .append("\"name\":\"").append(e.getName()).append("\",")
-                        .append("\"amount\":").append(e.getAmount()).append(",")
-                        .append("\"category\":\"").append(e.getCategory()).append("\"")
-                        .append("}");
-                if (i < result.size() - 1) {
-                    json.append(",");
-                }
-                json.append("\n");
+            JSONArray jsonArray = new JSONArray();
+            for (Expense e : result) {
+                JSONObject obj = new JSONObject();
+                obj.put("id", e.getId());
+                obj.put("name", e.getName());
+                obj.put("amount", e.getAmount());
+                obj.put("category", e.getCategory());
+                jsonArray.put(obj);
             }
-            json.append("]");
-
-            String responseBody = json.toString();
+            String responseBody = jsonArray.toString();
 
             out.println("HTTP/1.1 200 OK");
             out.println("Content-Type: application/json");
@@ -245,24 +217,35 @@ public class MultiThreadedEchoServer {
                 return;
             }
 
-            // Read the request body
             char[] bodyChars = new char[contentLength];
             int bytesRead = in.read(bodyChars, 0, contentLength);
             String body = new String(bodyChars, 0, bytesRead);
             System.out.println("Received body: " + body);
 
-            // Very primitive JSON parsing (for learning only)
-            String name = extractJsonValue(body, "name");
-            String category = extractJsonValue(body, "category");
-            double amount;
+            // Parse JSON
+            JSONObject json;
             try {
-                amount = Double.parseDouble(extractJsonValue(body, "amount"));
-            } catch (NumberFormatException e) {
-                sendErrorResponse(out, 400, "Bad Request: Invalid amount");
+                json = new JSONObject(body);
+            } catch (JSONException e) {
+                sendErrorResponse(out, 400, "Bad Request: Invalid JSON");
                 return;
             }
 
-            // Validate the data
+            // Extract fields (they may be missing)
+            String name;
+            String category;
+            double amount;
+            try {
+                name = json.getString("name");
+                category = json.getString("category");
+                amount = json.getDouble("amount");
+                System.out.println("Using JSON library");
+            } catch (JSONException e) {
+                sendErrorResponse(out, 400, "Bad Request: Missing required field: " + e.getMessage());
+                return;
+            }
+
+            // Validate
             String validationError = validateExpenseData(name, category, amount);
             if (validationError != null) {
                 sendErrorResponse(out, 400, "Bad Request: " + validationError);
@@ -279,9 +262,12 @@ public class MultiThreadedEchoServer {
             }
 
             // Build response JSON
-            String responseBody = String.format(
-                    "{\"id\":%d,\"name\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
-                    newId, name, amount, category);
+            JSONObject responseJson = new JSONObject();
+            responseJson.put("id", newId);
+            responseJson.put("name", name);
+            responseJson.put("amount", amount);
+            responseJson.put("category", category);
+            String responseBody = responseJson.toString();
 
             out.println("HTTP/1.1 201 Created");
             out.println("Content-Type: application/json");
@@ -290,23 +276,19 @@ public class MultiThreadedEchoServer {
             out.println(responseBody);
         }
 
-        // Helper to extract a value from a simple JSON string (very limited)
-        private String extractJsonValue(String json, String key) {
-            String search = "\"" + key + "\":";
-            int start = json.indexOf(search);
-            if (start == -1) return "";
-            start += search.length();
-            // Skip whitespace
-            while (start < json.length() && json.charAt(start) <= ' ') start++;
-            if (json.charAt(start) == '"') {
-                int end = json.indexOf('"', start + 1);
-                return json.substring(start + 1, end);
-            } else {
-                int end = json.indexOf(',', start);
-                if (end == -1) end = json.indexOf('}', start);
-                return json.substring(start, end).trim();
+        private String validateExpenseData(String name, String category, double amount) {
+            if (name == null || name.trim().isEmpty()) {
+                return "Name is required";
             }
+            if (category == null || category.trim().isEmpty()) {
+                return "Category is required";
+            }
+            if (amount <= 0) {
+                return "Amount must be greater than 0";
+            }
+            return null; // null means valid
         }
+
 
         private Map<String, String> parseQueryString(String queryString) {
             Map<String, String> queryParams = new HashMap<>();
@@ -333,10 +315,9 @@ public class MultiThreadedEchoServer {
                 sendErrorResponse(out, 400, "Bad Request: Invalid path");
                 return;
             }
-            String idStr = pathParts[2];
             int id;
             try {
-                id = Integer.parseInt(idStr);
+                id = Integer.parseInt(pathParts[2]);
             } catch (NumberFormatException e) {
                 sendErrorResponse(out, 400, "Bad Request: ID must be a number");
                 return;
@@ -357,10 +338,12 @@ public class MultiThreadedEchoServer {
                 return;
             }
 
-            String responseBody = String.format(
-                    "{\"id\":%d,\"name\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
-                    found.getId(), found.getName(), found.getAmount(), found.getCategory()
-            );
+            JSONObject json = new JSONObject();
+            json.put("id", found.getId());
+            json.put("name", found.getName());
+            json.put("amount", found.getAmount());
+            json.put("category", found.getCategory());
+            String responseBody = json.toString();
 
             out.println("HTTP/1.1 200 OK");
             out.println("Content-Type: application/json");
@@ -392,6 +375,7 @@ public class MultiThreadedEchoServer {
                 for (int i = 0; i < expenses.size(); i++) {
                     if (expenses.get(i).getId() == id) {
                         indexToRemove = i;
+
                         break;
                     }
                 }
@@ -416,7 +400,7 @@ public class MultiThreadedEchoServer {
         }
 
         private void handlePutExpenseById(BufferedReader in, PrintWriter out, String path, int contentLength) throws IOException {
-            // 1. Extract ID from path (e.g., "/expenses/2" -> "2")
+            // Extract ID from path (unchanged)
             String[] pathParts = path.split("/");
             if (pathParts.length < 3) {
                 sendErrorResponse(out, 400, "Bad Request: Invalid path");
@@ -430,7 +414,7 @@ public class MultiThreadedEchoServer {
                 return;
             }
 
-            // 2. Read the request body (must be present)
+            // Read body
             if (contentLength <= 0) {
                 sendErrorResponse(out, 400, "Bad Request: Missing body");
                 return;
@@ -440,40 +424,53 @@ public class MultiThreadedEchoServer {
             String body = new String(bodyChars, 0, bytesRead);
             System.out.println("PUT body: " + body);
 
-            // 3. Parse the JSON to get updated fields
-            String name = extractJsonValue(body, "name");
-            String category = extractJsonValue(body, "category");
-            double amount;
+            // Parse JSON
+            JSONObject json;
             try {
-                amount = Double.parseDouble(extractJsonValue(body, "amount"));
-            } catch (NumberFormatException e) {
-                sendErrorResponse(out, 400, "Bad Request: Invalid amount");
+                json = new JSONObject(body);
+            } catch (JSONException e) {
+                sendErrorResponse(out, 400, "Bad Request: Invalid JSON");
                 return;
             }
 
+            // Extract fields
+            String name;
+            String category;
+            double amount;
+            try {
+                name = json.getString("name");
+                category = json.getString("category");
+                amount = json.getDouble("amount");
+            } catch (JSONException e) {
+                sendErrorResponse(out, 400, "Bad Request: Missing required field: " + e.getMessage());
+                return;
+            }
+
+            // Validate
             String validationError = validateExpenseData(name, category, amount);
             if (validationError != null) {
                 sendErrorResponse(out, 400, "Bad Request: " + validationError);
                 return;
             }
 
-            // 4. Thread‑safe update: find and replace the expense
+            // Update (synchronized block)
             boolean updated = false;
             synchronized (MultiThreadedEchoServer.class) {
                 for (int i = 0; i < expenses.size(); i++) {
                     Expense e = expenses.get(i);
                     if (e.getId() == id) {
-                        // Create a new Expense object with the same ID but updated fields
                         Expense updatedExpense = new Expense(id, name, amount, category);
                         expenses.set(i, updatedExpense);
-                        saveToFile();
                         updated = true;
+                        saveToFile();
 
-
-                        // Build the response JSON (the updated expense)
-                        String responseBody = String.format(
-                                "{\"id\":%d,\"name\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
-                                id, name, amount, category);
+                        // Build response JSON
+                        JSONObject responseJson = new JSONObject();
+                        responseJson.put("id", id);
+                        responseJson.put("name", name);
+                        responseJson.put("amount", amount);
+                        responseJson.put("category", category);
+                        String responseBody = responseJson.toString();
 
                         out.println("HTTP/1.1 200 OK");
                         out.println("Content-Type: application/json");
