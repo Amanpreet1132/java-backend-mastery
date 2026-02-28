@@ -367,36 +367,40 @@ public class MultiThreadedEchoServer {
                 return;
             }
 
-            // Find and remove expense (thread‑safe)
-            boolean removed;
+            Expense deletedExpense = null;
             synchronized (MultiThreadedEchoServer.class) {
-                // We need to find the index to remove by id
                 int indexToRemove = -1;
                 for (int i = 0; i < expenses.size(); i++) {
                     if (expenses.get(i).getId() == id) {
                         indexToRemove = i;
-
+                        deletedExpense = expenses.get(i);   // capture before removal
                         break;
                     }
                 }
                 if (indexToRemove != -1) {
                     expenses.remove(indexToRemove);
-                    removed = true;
                     saveToFile();
-                } else {
-                    removed = false;
                 }
             }
 
-            if (!removed) {
+            if (deletedExpense == null) {
                 sendErrorResponse(out, 404, "Expense not found");
                 return;
             }
 
-            // 204 No Content – no response body
-            out.println("HTTP/1.1 204 No Content");
-            out.println("Content-Length: 0");
-            out.println(); // blank line ends headers
+            // Build JSON for the deleted expense using org.json
+            JSONObject json = new JSONObject();
+            json.put("id", deletedExpense.getId());
+            json.put("name", deletedExpense.getName());
+            json.put("amount", deletedExpense.getAmount());
+            json.put("category", deletedExpense.getCategory());
+            String responseBody = json.toString();
+
+            out.println("HTTP/1.1 200 OK");
+            out.println("Content-Type: application/json");
+            out.println("Content-Length: " + responseBody.length());
+            out.println();
+            out.println(responseBody);
         }
 
         private void handlePutExpenseById(BufferedReader in, PrintWriter out, String path, int contentLength) throws IOException {
