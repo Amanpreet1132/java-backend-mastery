@@ -7,24 +7,29 @@ import org.json.JSONException;
 
 public class MultiThreadedEchoServer {
 
-    public static void main(String[] args) throws IOException {
-        ServerSocket serverSocket = new ServerSocket(12345);
-        System.out.println("HTTP API server running on port 12345");
-        System.out.println("Try: http://localhost:12345/expenses");
+    @SuppressWarnings("InfiniteLoopStatement")
+    public static void main(String[] args) {
+        // Wrap ServerSocket in try-with-resources to ensure it's closed properly
+        try (ServerSocket serverSocket = new ServerSocket(12345)) {
+            System.out.println("HTTP API server running on port 12345");
+            System.out.println("Try: http://localhost:12345/expenses");
 
-        while (true) {
-            Socket clientSocket = serverSocket.accept();
-            System.out.println("New client connected: " + clientSocket.getInetAddress());
+            while (true) {
+                Socket clientSocket = serverSocket.accept();
+                System.out.println("New client connected: " + clientSocket.getInetAddress());
 
-            Thread clientHandler = new Thread(new ClientHandler(clientSocket));
-            clientHandler.start();
+                Thread clientHandler = new Thread(new ClientHandler(clientSocket));
+                clientHandler.start();
+            }
+        } catch (IOException e) {
+            System.err.println("Server error: " + e.getMessage());
         }
     }
 
     // Inner class that handles each client in its own thread
     static class ClientHandler implements Runnable {
-        private Socket clientSocket;
-        private ExpenseDao expenseDao = new ExpenseDao();   // <-- database access
+        private final Socket clientSocket;
+        private final ExpenseDao expenseDao = new ExpenseDao();   // database access
 
         public ClientHandler(Socket socket) {
             this.clientSocket = socket;
@@ -32,16 +37,15 @@ public class MultiThreadedEchoServer {
 
         @Override
         public void run() {
-            try (
-                    BufferedReader in = new BufferedReader(
-                            new InputStreamReader(clientSocket.getInputStream()));
-                    PrintWriter out = new PrintWriter(
-                            clientSocket.getOutputStream(), true)
-            ) {
+            try (Socket clientSocket = this.clientSocket;
+                 BufferedReader in = new BufferedReader(
+                         new InputStreamReader(clientSocket.getInputStream()));
+                 PrintWriter out = new PrintWriter(
+                         clientSocket.getOutputStream(), true)) {
+
                 String requestLine = in.readLine();
                 if (requestLine == null) {
-                    clientSocket.close();
-                    return;
+                    return;  // socket will be closed automatically by try-with-resources
                 }
                 System.out.println("Request: " + requestLine);
 
@@ -59,7 +63,6 @@ public class MultiThreadedEchoServer {
                 String[] parts = requestLine.split(" ");
                 if (parts.length < 2) {
                     sendErrorResponse(out, 400, "Bad Request");
-                    clientSocket.close();
                     return;
                 }
                 String method = parts[0];
@@ -88,7 +91,6 @@ public class MultiThreadedEchoServer {
                     sendErrorResponse(out, 404, "Not Found");
                 }
 
-                clientSocket.close();
                 System.out.println("Client disconnected: " + clientSocket.getInetAddress());
             } catch (IOException e) {
                 System.out.println("Error handling client: " + e.getMessage());
@@ -191,7 +193,6 @@ public class MultiThreadedEchoServer {
                 name = json.getString("name");
                 category = json.getString("category");
                 amount = json.getDouble("amount");
-                System.out.println("Using JSON library");
             } catch (JSONException e) {
                 sendErrorResponse(out, 400, "Bad Request: Missing required field: " + e.getMessage());
                 return;
